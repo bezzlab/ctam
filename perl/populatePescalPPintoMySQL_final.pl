@@ -11,12 +11,14 @@ require "misc.pl";
 #therefore there are hard-coded parts, e.g. the CSV file layout (header order), Mascot:score as peptide score etc.
 $"=">,<";#set array element separator
 $|=1;#set autoflush, i.e. print instantly into non-stdout pipe
-my $dbi = &getDBI();
+my $dbi = &getDBI();#subroutine in misc.pl
 my $csv = Text::CSV->new ({
 	binary    => 1, # Allow special character. Always set this
 	auto_diag => 1, # Report irregularities immediately
 });
 exit;
+#all handles in the form of table name followed by type: insert or query. 
+#For query type the query columns are listed
 #The database handles for experiment level
 my $cellLineByNameAndSpeciesQuery = $dbi->prepare("select id from cell_line where name = ? and species = ?");
 my $cellLineInsert = $dbi->prepare("insert into cell_line values(null,?,?,null,null,null,null");
@@ -90,8 +92,8 @@ my $observedRtInsert = $dbi->prepare("insert into observed_RT values(?,?,?,?)");
 my $calculatedInsert = $dbi->prepare("insert into calculated_RT values (?,?,?,?)");
 my $peakAreaInsert = $dbi->prepare("insert into peak_area values (?,?,?,?)");
 
-my %proteins;
-my %done_proteins;
+my %proteins;#record whether the protein in the database
+my %done_proteins;#map of the protein id used in CSV which may be obselete and protein id stored in the database
 my %cell_lines;
 my %vendors;
 my %cell_lines_used;
@@ -103,12 +105,13 @@ while (my ($id,$acc)=$allProteinQuery->fetchrow_array()){
 	$done_proteins{$acc}=$id;
 }
 
-open my $expFh, "<", "experiment list.csv";
+open my $expFh, "<", "experiment list.csv";#the file lists all experiments which need to be processed
 $csv->getline ($expFh);#remove header
 while(my $row = $csv->getline ($expFh)) {
 #	Experiment name,folder name,submitter,affiliation,date,cell line,species,vendor
+#   date needs to be in the format of yyyy/mm/dd
 	my ($name,$dir,$submitter,$affiliation,$date,$description)=@$row;
-	next if (substr($name,0,1) eq "#");
+	next if (substr($name,0,1) eq "#");#skip the lines starting with # which make it possible to avoid already processed experiments while still keep them "visiable"
 	print "Parsing the data for experiment $name in the folder $dir ".localtime."\n";
 #	print "Cell Line Used id $cell_line_used_id\n";
 
@@ -155,7 +158,7 @@ while(my $row = $csv->getline ($expFh)) {
 			my $count = $runBySpectralNameQuery->execute($spectral_file);
 			($run_id) = $runBySpectralNameQuery->fetchrow_array() if($count>0);
 		}
-		if ($run_id==-1){
+		if ($run_id==-1){#new run
 			my $name;
 			my $location;
 			if(length $separator>0){
@@ -240,7 +243,7 @@ while(my $row = $csv->getline ($expFh)) {
 			$experiment_cell_lines{$cell_line_used_id}=1;
 		}
 
-		my @regulators=split(",",$regulator_str);
+		my @regulators=split(",",$regulator_str);#multiple regulators are allowed which is separated by ","
 		foreach my $regulator(@regulators){
 			my $regulator_id;
 			if(exists $regulators{$regulator}){
@@ -435,6 +438,7 @@ while(my $row = $csv->getline ($expFh)) {
 
 	}#end of reading metadata.csv
 
+	#start to process PSM files which currently is in the form of F******.csv (extracted from Mascot F******.dat files)
 	opendir DIR, $dir;
 	my @files = readdir DIR;
 	foreach my $file(@files){
@@ -456,7 +460,7 @@ while(my $row = $csv->getline ($expFh)) {
 		$psmByIdentificationQuery->execute($identification_id);
 		my ($psmCount) = $psmByIdentificationQuery->fetchrow_array();
 		#print "$psmCount\n";
-		if($psmCount>0){
+		if($psmCount>0){#therefore if the run is only partially imported, they all need to be deleted from the database to make it possible to import again
 			print "PSMs have been extracted from the file with name $file (converted from $datfile)\nSkipped\n";
 			next;
 		}
@@ -477,7 +481,7 @@ while(my $row = $csv->getline ($expFh)) {
 				$protein_id = $done_proteins{$protein};
 			}else{
 				my $tmp = &getProteinInfoFromUniprotSingle($protein);
-				if (length $tmp == 0){#no information found on UniProt e.g. protein obsolete then use information stored in CSV
+				if (length $tmp == 0){#no information found on UniProt e.g. protein obsolete or network error then use information stored in CSV
 					$protein_id = $protein;
 					$acc = $protein;
 					if ($desc=~/\sGN=(\S+)\s/){
@@ -485,12 +489,10 @@ while(my $row = $csv->getline ($expFh)) {
 					}
 				}else{
 					($protein_id,$acc,$gene)=split("\t",$tmp);
-					if (length $gene > 20){
+					if (length $gene > 20){#one protein may have many genes, then try to get the gene preferred
 						if ($desc=~/\sGN=(\S+)\s/){
 							my $alternative = $1;
-#							print "Before for $protein_id gene is <$gene> from website and <$alternative> from $desc\n";
 							$gene = $alternative if (index($gene,$alternative)>-1);
-#							print "After gene is $gene\n";
 						}
 					}
 				}
@@ -569,7 +571,7 @@ while(my $row = $csv->getline ($expFh)) {
 			$count++;
 			my ($csvAcc,$desc,$peptide,$modification,$mz,$bestRt,$charge,$mod_pos,$max_ppm,$min_ppm,$mean_ppm,$minRt,$maxRt,$pro_score,$max_expectancy,$mean_expectancy,$max_score,$mean_score,$num_PSMs,$pep_start,$pep_end,$max_delta,$title,$filename,undef,undef,$pFDR,$total_ion_intensity)=@$row;
 			my $acc;
-			#in theory the following if is redundant. However when anything wrong in the previous step then resume, the protein may not be in the memory, i.e. done_proteins
+			#in theory the following if statement is redundant. However when anything wrong in the previous step then resume, the protein may not be in the memory, i.e. done_proteins
 			if(exists $done_proteins{$csvAcc}){
 				$acc = $done_proteins{$csvAcc};
 			}else{ 
@@ -679,7 +681,7 @@ while(my $row = $csv->getline ($expFh)) {
 		$peptide_database_id{$database_id} = $peptide_id;
 #
 		for (my $i=$run_header_idx;$i<$num_columns;$i++){
-			$observedRtInsert->execute($experiment_id,$run_id_order{$i},$peptide_id,$arr[$i]) if (exists $run_id_order{$i} && $arr[$i]>0);
+			$observedRtInsert->execute($experiment_id,$run_id_order{$i},$peptide_id,$arr[$i]) if (exists $run_id_order{$i} && $arr[$i]>0);#only store non-zero value. When retrieving, not exists => value 0
 		}
 	}
 
