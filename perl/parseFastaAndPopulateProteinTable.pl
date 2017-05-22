@@ -6,12 +6,17 @@ use DBD::mysql;
 #get all reviewed human sequences and download the fasta file
 require "misc.pl";
 
-my $dbi = &getDBI("gio2 insert");
+my $dbi = &getDBI("localhost");
+#my $dbi = &getDBI("gio2 insert");
 my $proteinByIdQuery = $dbi->prepare("select accession, description, gene from protein where id = ?");
 my $proteinInsert = $dbi->prepare("insert into protein values(?,?,?,?,null)");#id, accession, desc, gene, gene id
 my $proteinUpdate = $dbi->prepare("update protein set accession = ?, description = ?, gene = ? where id = ?");
 
-open IN,"human swissprot Oct 2016.fasta" or die "Can not find the file\n";#the fasta file with standard Uniprot heading
+if (scalar @ARGV != 1){
+	print "Usage: perl parseFastaAndPopulateProteinTable.pl <Swissprot fasta file>";
+	exit;
+}
+open IN,"$ARGV[0]" or die "Can not find the file\n";#the fasta file with standard Uniprot heading
 
 while(my $line=<IN>){
 	chomp $line;

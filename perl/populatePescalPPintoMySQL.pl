@@ -7,25 +7,25 @@ use LWP::UserAgent;
 require "misc.pl";
 
 #IMPORTANT: the NULL value (empty value) in MySQL will be retrieved as "" in perl (length = 0)
-#this script is based on the converted CSV by Pescal++ from Mascot identification result .dat file
+#this script is based on the converted CSV by Pescal++ from Mascot identification result .dat file or converted mzIdentML file
 #therefore there are hard-coded parts, e.g. the CSV file layout (header order), Mascot:score as peptide score etc.
 $"=">,<";#set array element separator
 $|=1;#set autoflush, i.e. print instantly into non-stdout pipe
-my $dbi = &getDBI();#subroutine in misc.pl
+my $dbi = &getDBI("gio2 insert");
+#my $dbi = &getDBI();#subroutine in misc.pl
 my $csv = Text::CSV->new ({
 	binary    => 1, # Allow special character. Always set this
 	auto_diag => 1, # Report irregularities immediately
 });
-exit;
+
 #all handles in the form of table name followed by type: insert or query. 
 #For query type the query columns are listed
-#The database handles for experiment level
 my $cellLineByNameAndSpeciesQuery = $dbi->prepare("select id from cell_line where name = ? and species = ?");
-my $cellLineInsert = $dbi->prepare("insert into cell_line values(null,?,?,null,null,null,null");
+my $cellLineInsert = $dbi->prepare("insert into cell_line values(null,?,?,null,null,null,null)");
 my $vendorByNameQuery = $dbi->prepare("select id from vendor where name = ?");
 my $vendorInsert = $dbi->prepare("insert into vendor values(null,?,null)");
-my $cellLineUsedByCellAndVendorQuery = $dbi->prepare("select id from cell_line_used where cell_line_id = ? AND vendor_id=?");
-my $cellLineUsedInsert = $dbi->prepare("insert into cell_line_used values(null,?,?,null,null)");
+my $cellLineUsedByCellVendorAndVariantQuery = $dbi->prepare("select id from cell_line_used where cell_line_id = ? AND vendor_id = ? AND variant = ?");
+my $cellLineUsedInsert = $dbi->prepare("insert into cell_line_used values(null,?,?,?,null,null,null)");
 my $runCellLineCountQuery = $dbi->prepare("select count(*) from run_cell_line where run_id = ? AND cell_line_used_id = ?");
 my $runCellLineInsert = $dbi->prepare("insert into run_cell_line values(?,?)");
 
@@ -40,14 +40,15 @@ my $experimentRegulatorInsert = $dbi->prepare("insert into experiment_regulator 
 
 my $experimentByNameAndCellLineQuery = $dbi->prepare("select id from experiment where name = ? AND submitter = ? AND affiliation = ? AND date = ?");
 my $experimentInsert = $dbi->prepare("insert into experiment values(null,?,?,?,?,?,0)");
+my $experimentUpdateProcessed = $dbi->prepare("update experiment set processed = 1 where id = ?");
 
-my $proteinQueryByID = $dbi->prepare("select * from protein where id=?");
-my $proteinInsert = $dbi->prepare("insert into protein values (?,?,?,?,null)");
-#The database handles for psm level
 my $searchParameterByFastaQuery = $dbi->prepare("select * from search_parameter where fasta_file=?");
 my $searchParameterInsert = $dbi->prepare("insert into search_parameter values (null,?,?,?,?,?,?,?,?,?,?,?)");
 my $searchParameterModificationBySearchQuery = $dbi->prepare("select * from search_parameter_modification where search_parameter_id = ?");
 my $searchParameterModificationInsert = $dbi->prepare("insert into search_parameter_modification values (?,?,?)");
+
+my $proteinQueryByID = $dbi->prepare("select * from protein where id=?");
+my $proteinInsert = $dbi->prepare("insert into protein values (?,?,?,?,null)");
 
 my $identificationByRunAndSearchQuery = $dbi->prepare("select id,identification_file from identification where run_id = ? and search_parameter_id = ?");
 my $identificationInsert = $dbi->prepare("insert into identification values (null,?,?,?)");
@@ -60,7 +61,7 @@ my $identificationSoftwareInsert = $dbi->prepare("insert into identification_sof
 my $runBySpectralLocationQuery = $dbi->prepare("select id from run where spectral_file_location = ?");
 my $runBySpectralNameQuery = $dbi->prepare("select id from run where spectral_file_name = ?");
 my $runInsert = $dbi->prepare("insert into run values (null,?,?,?,?,null,null)");
-my $runInExperimentQuery = $dbi->prepare("select role from runs_in_experiment where experiment_id = ? AND run_id = ?");
+my $runInExperimentQuery = $dbi->prepare("select rie.group from runs_in_experiment rie where experiment_id = ? AND run_id = ?");
 my $runInExperimentInsert = $dbi->prepare("insert into runs_in_experiment values (?,?,?)");
 
 my $modificationByAllQuery = $dbi->prepare("select * from modification");
@@ -71,12 +72,6 @@ my $psmInsert = $dbi->prepare("insert into psm values (null,?,?,?,?,?,?,?,?,?,?,
 my $psmScoreInsert = $dbi->prepare("insert into psm_score values (?,?,?,?)");
 my $psmModificationInsert = $dbi->prepare("insert into psm_modification values (?,?,?,?,null,null)");
 
-my %modifications;
-$modificationByAllQuery->execute();
-while(my @arr=$modificationByAllQuery->fetchrow_array()){
-	$modifications{$arr[4]} = $arr[0];
-}
-
 my $psmNumberByIdentificationQuery = $dbi->prepare("select count(*) from psm where identification_id = ?");
 my $psmByIdentificationAndProteinQuery = $dbi->prepare("select id,spectrum_title from psm where identification_id = ? AND protein_id = ?");
 
@@ -84,13 +79,20 @@ my $bestPsmInsert = $dbi->prepare("insert into best_psm_in_identification values
 my $checkBestPSMdone = $dbi->prepare("select count(*) from psm p, best_psm_in_identification bp where p.id = bp.psm_id AND p.identification_id = ?");
 
 my $peptideBySequenceProteinAndChargeQuery = $dbi->prepare("select id from peptide where sequence = ? AND protein = ? AND charge = ? AND modification_str = ?");
-my $peptideInsert = $dbi->prepare("insert into peptide values (null,?,?,?,?,?,?,?,?)");
+my $peptideInsert = $dbi->prepare("insert into peptide values (null,?,?,?,?,?,?,?)");
 my $peptideInExperimentByPeptideAndExperimentQuery = $dbi->prepare("select peptide_id from peptide_in_experiment where peptide_id = ? AND experiment_id = ?");
-my $peptideInExperimentInsert = $dbi->prepare("insert into peptide_in_experiment values (?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?,?)");
+my $peptideInExperimentInsert = $dbi->prepare("insert into peptide_in_experiment values (?,?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?,?)");
 my $observedRtQuery = $dbi->prepare("select value from observed_RT where experiment_id = ? AND run_id = ? AND peptide_id = ?");
 my $observedRtInsert = $dbi->prepare("insert into observed_RT values(?,?,?,?)");
 my $calculatedInsert = $dbi->prepare("insert into calculated_RT values (?,?,?,?)");
 my $peakAreaInsert = $dbi->prepare("insert into peak_area values (?,?,?,?)");
+
+
+my %modifications;
+$modificationByAllQuery->execute();
+while(my @arr=$modificationByAllQuery->fetchrow_array()){
+	$modifications{$arr[4]} = $arr[0];
+}
 
 my %proteins;#record whether the protein in the database
 my %done_proteins;#map of the protein id used in CSV which may be obselete and protein id stored in the database
@@ -115,6 +117,7 @@ while(my $row = $csv->getline ($expFh)) {
 	print "Parsing the data for experiment $name in the folder $dir ".localtime."\n";
 #	print "Cell Line Used id $cell_line_used_id\n";
 
+	#-1 is used thoroughout as the default flag for not found, i.e. new entry needs to be inserted
 	my $experiment_id = -1;
 	my $count = $experimentByNameAndCellLineQuery->execute($name,$submitter,$affiliation,$date);
 	if ($count==0){
@@ -138,8 +141,10 @@ while(my $row = $csv->getline ($expFh)) {
 	print "Parsing metadata file at ".localtime."\n";
 	open my $metaFh, "<", "$dir//metadata.csv" or die "metadata: $!";
 	$csv->getline ($metaFh);#remove header
+	my $lineCount = 0;
 	while(my $row = $csv->getline ($metaFh)) {
-		my ($role,$spectral_file,$identification_file,$cell_line_str,$cell_line_species_str,$vendor_str,$regulator_str,$software_names_str,$software_CV_accessions_str,$software_versions_str,$fasta_file,$enzyme,$peptide_tolerance,$peptide_tolerance_unit,$product_tolerance,$product_tolerance_unit,$miscleavage,$min_charge,$max_charge,$species,$species_taxo_id,$fixed_modifications,$variable_modifications) = @$row;
+		$lineCount++;
+		my ($role,$spectral_file,$identification_file,$cell_line_str,$cell_line_species_str,$vendor_str,$variant,$regulator_str,$software_names_str,$software_CV_accessions_str,$software_versions_str,$fasta_file,$enzyme,$peptide_tolerance,$peptide_tolerance_unit,$product_tolerance,$product_tolerance_unit,$miscleavage,$min_charge,$max_charge,$species,$species_taxo_id,$fixed_modifications,$variable_modifications) = @$row;
 		#locate run id according to the spectral file either as location (preferred as less chance to be duplicate) or filename
 		#run is determined by the spectral file, i.e. one spectral file one run
 		next if (substr($role,0,1) eq "#");
@@ -224,17 +229,17 @@ while(my $row = $csv->getline ($expFh)) {
 			}
 #		print "vendor $vendor_id\n";
 			my $cell_line_used_id = -1;
-			if (exists $cell_lines_used{$cell_line_id-$vendor_id}){
-				$cell_line_used_id = $cell_lines_used{$cell_line_id-$vendor_id};
+			if (exists $cell_lines_used{"$cell_line_id-${vendor_id}-$variant"}){
+				$cell_line_used_id = $cell_lines_used{"$cell_line_id-${vendor_id}-$variant"};
 			}else{
-				$count = $cellLineUsedByCellAndVendorQuery->execute($cell_line_id,$vendor_id);
+				$count = $cellLineUsedByCellVendorAndVariantQuery->execute($cell_line_id,$vendor_id,$variant);
 				if ($count == 0){
-					$cellLineUsedInsert->execute($cell_line_id,$vendor_id);
+					$cellLineUsedInsert->execute($cell_line_id,$vendor_id,$variant);
 					$cell_line_used_id = $dbi->last_insert_id(undef,undef,undef,undef);
 				}else{
-					($cell_line_used_id) = $cellLineUsedByCellAndVendorQuery->fetchrow_array();
+					($cell_line_used_id) = $cellLineUsedByCellVendorAndVariantQuery->fetchrow_array();
 				}
-				$cell_lines_used{$cell_line_id-$vendor_id} = $cell_line_used_id;
+				$cell_lines_used{"$cell_line_id-${vendor_id}-$variant"} = $cell_line_used_id;
 			}		
 
 			$runCellLineCountQuery->execute($run_id,$cell_line_used_id);
@@ -243,9 +248,11 @@ while(my $row = $csv->getline ($expFh)) {
 			$experiment_cell_lines{$cell_line_used_id}=1;
 		}
 
+#		print "<$lineCount>\t<$regulator_str>\n";
 		my @regulators=split(",",$regulator_str);#multiple regulators are allowed which is separated by ","
 		foreach my $regulator(@regulators){
 			my $regulator_id;
+#			print "individual regulator <$regulator>\n" if ($lineCount == 34);
 			if(exists $regulators{$regulator}){
 				$regulator_id = $regulators{$regulator};
 			}else{
@@ -258,6 +265,7 @@ while(my $row = $csv->getline ($expFh)) {
 				}
 				$regulators{$regulator} = $regulator_id;
 			}
+#			print "$regulator_id\n" if ($lineCount == 34);
 			$treatmentCountQuery->execute($run_id,$regulator_id);
 			($count) = $treatmentCountQuery->fetchrow_array();
 			$treatmentInsert->execute($run_id, $regulator_id) if ($count==0);
@@ -445,15 +453,18 @@ while(my $row = $csv->getline ($expFh)) {
 		next unless ($file=~/^F\d+\.csv$/);
 		my $idx = rindex($file,".");
 		my $datfile = substr($file,0,$idx).".dat";
+		my $mzidfile = substr($file,0,$idx).".mzid";
 		#print "Dealing with $dir\\$file\n";
-		unless (exists $identification_files{$datfile} || exists $identification_files{$file}) {
-#			print "Identification $datfile is not found in the metadata.\n";
+		unless (exists $identification_files{$datfile} || $identification_files{$mzidfile} || exists $identification_files{$file}) {
+			print "Identification $datfile is not found in the metadata.\n";
 			next;
 		}
 
 		my $identification_id;
 		if (exists $identification_files{$datfile}){
 			$identification_id = $identification_files{$datfile};
+		}elsif(exists $identification_files{$mzidfile}){
+			$identification_id = $identification_files{$mzidfile};
 		}else{
 			$identification_id = $identification_files{$file};
 		}
@@ -504,6 +515,7 @@ while(my $row = $csv->getline ($expFh)) {
 					$proteins{$protein_id}=1;
 				}
 			}
+			undef $total_ion_intensity if (length($total_ion_intensity)==0);
 			$psmInsert->execute($identification_id,$title,$peptide,$protein_id,$start,$end,$pro_score,1,$rt,$charge,$mz,$total_ion_intensity);
 			my $firstPSMid = $dbi->last_insert_id(undef,undef,undef,undef);
 			$psmScoreInsert->execute($firstPSMid,"Mascot:score","MS:1001171",$pep_score) if(length $pep_score>0);
@@ -541,14 +553,19 @@ while(my $row = $csv->getline ($expFh)) {
 		next unless ($file=~/^pF\d+\.csv$/);
 		my $idx = rindex($file,".");
 		my $datfile = substr($file,1,$idx)."dat";#start from location 1 to remove p from pF**** file name
-
-		unless (exists $identification_files{$datfile}) {
+		my $mzidfile = substr($file,1,$idx)."mzid";
+		unless (exists $identification_files{$datfile}||exists $identification_files{$mzidfile}) {
 #			print "Identification $datfile is not found in the metadata.\n";
 			next;
 		}
 
 		print "Dealing with $dir\\$file at ".localtime."\n";
-		my $identification_id = $identification_files{$datfile};
+		my $identification_id;
+		if(exists $identification_files{$mzidfile}){
+			$identification_id = $identification_files{$mzidfile};
+		}else{
+			$identification_id = $identification_files{$datfile};
+		}
 		$psmNumberByIdentificationQuery->execute($identification_id);
 		my ($psmCount) = $psmNumberByIdentificationQuery->fetchrow_array();
 		if($psmCount==0){
@@ -600,6 +617,7 @@ while(my $row = $csv->getline ($expFh)) {
 			}
 #			print "psm $best_psm_id with title $title\n";
 			my $best_psm_id = $psm_ids{$acc}{$title};
+			undef $total_ion_intensity if((length $total_ion_intensity)==0);
 			$bestPsmInsert->execute($best_psm_id,$max_score,$mean_score,$max_delta,$min_ppm,$max_ppm,$mean_ppm,$minRt,$maxRt,$max_expectancy,$mean_expectancy,$num_PSMs,$total_ion_intensity);
 			print "Processed $count records\n" if (($count%500)==0);
 		}
@@ -622,17 +640,58 @@ while(my $row = $csv->getline ($expFh)) {
 		$run_id_order{$i} = $run_names{$headers[$i]} if (exists $run_names{$headers[$i]});
 #		print "column $i\t$headers[$i]\trun id $run_names{$headers[$i]}\n";
 	}
-#	foreach (keys %run_id_order){
+#	foreach (sort {$b<=>$a} keys %run_id_order){
 #		print "column index <$_> run id <$run_id_order{$_}>\n";
 #	}
 #	exit;
+	my $oldFormat = 0;
+	$oldFormat=1 if ($run_header_idx == 34 && length($headers[33])==0);
+#	if ($oldFormat==1){
+#		print "$experiment_id old\n";
+#	}else{
+#		print "$experiment_id new\n";
+#	}
 
 	my %peptide_database_id; #keys are Pedro's database id, values are the peptide ids in the database
 	#print "$run_header_idx\t$headers[$run_header_idx]\n";
 	while (my $row = $csv->getline ($fh)) {
 		my @arr = @$row;
-		my ($acc,$desc,$peptide,$modification,$mz,$bestRt,$charge,$mod_pos,$max_ppm,$min_ppm,$mean_ppm,$minRt,$maxRt,$pro_score,$max_expectancy,$mean_expectancy,$max_score,$mean_score,$num_PSMs,$pep_start,$pep_end,$max_delta,$title,$filename,undef,undef,$pFDR,$total_ion_intensity,undef,undef,$database_id)=@arr;
-		$acc = $done_proteins{$acc};
+		my ($accCSV,$desc,$peptide,$modification,$mz,$bestRt,$charge,$mod_pos,$max_ppm,$min_ppm,$mean_ppm,$minRt,$maxRt,$pro_score,$max_expectancy,$mean_expectancy,$max_score,$mean_score,$num_PSMs,$pep_start,$pep_end,$max_delta,$title,$filename,$pFDR,$total_ion_intensity,$database_id);
+		my $genePlusPhospho="";
+		if ($oldFormat==1){
+			($accCSV,$desc,$peptide,$modification,$mz,$bestRt,$charge,$mod_pos,$max_ppm,$min_ppm,$mean_ppm,$minRt,$maxRt,$pro_score,$max_expectancy,$mean_expectancy,$max_score,$mean_score,$num_PSMs,$pep_start,$pep_end,$max_delta,$title,$filename,undef,undef,$pFDR,$total_ion_intensity,undef,undef,$database_id)=@arr;
+		}else{
+			($accCSV,$desc,$peptide,$modification,$mz,$bestRt,$charge,$mod_pos,$max_ppm,$min_ppm,$mean_ppm,$minRt,$maxRt,$pro_score,$max_expectancy,$mean_expectancy,$max_score,$mean_score,$num_PSMs,$pep_start,$pep_end,$max_delta,$title,$filename,undef,undef,$pFDR,$total_ion_intensity,undef,$genePlusPhospho,$database_id)=@arr;
+		}
+#		print "<$peptide>\t<$charge>\t<$modification>\t<$genePlusPhospho>: ";
+		my $phosphoSite="";
+		unless ($genePlusPhospho=~/no mod$/){
+			my @sites = split(" ", $genePlusPhospho);
+			for (my $i=1;$i<scalar @sites;$i++){
+				my $site = $sites[$i];
+				if ($site=~/p([STY]\d+)/){
+					$phosphoSite.="$1+";
+				}	
+			}
+			$phosphoSite = substr($phosphoSite,0,(length $phosphoSite)-1) if (length $phosphoSite>0);
+		}
+#		print "<$phosphoSite>\n";
+
+		my $acc;
+		#the following codes are for the case that PSMs and best PSMs are pre-imported, e.g. mega batch
+		if (exists $done_proteins{$accCSV}){
+			$acc = $done_proteins{$accCSV};
+		}else{
+			my $tmp = &getProteinInfoFromUniprotSingle($accCSV);
+			if (length $tmp == 0){#no information found on UniProt e.g. protein obsolete or network error then use information stored in CSV
+				$acc = $accCSV;
+			}else{
+				my $protein_id;
+				($protein_id,$acc)=split("\t",$tmp);
+			}
+			$done_proteins{$accCSV}=$acc;
+		}
+
 		#print "$acc\t$peptide\t$database_id\n";
 
 		#this step makes sure that all modifications are displayed in the alphabetic order which makes it comparable
@@ -664,7 +723,7 @@ while(my $row = $csv->getline ($expFh)) {
 		if ($num > 0){
 			($peptide_id) = $peptideBySequenceProteinAndChargeQuery->fetchrow_array();
 		}else{
-			$peptideInsert->execute($peptide,$acc,$pep_start,$pep_end,$charge,$mz,$mod_str,undef);
+			$peptideInsert->execute($peptide,$acc,$pep_start,$pep_end,$charge,$mz,$mod_str);
 			$peptide_id = $dbi->last_insert_id(undef,undef,undef,undef);
 		}
 		#print "\n\nPeptide id: <$peptide_id> num: <$num>\n\n";
@@ -675,7 +734,8 @@ while(my $row = $csv->getline ($expFh)) {
 		if($num>0){
 			print "There is already record for peptide $peptide with charge $charge in protein $acc in the experiment $experiment_id\n";
 		}else{
-			$peptideInExperimentInsert->execute($peptide_id,$experiment_id,$bestRt,$min_ppm,$max_ppm,$mean_ppm,$minRt,$maxRt,$pro_score,$max_expectancy,$mean_expectancy,$max_score,$mean_score,$num_PSMs,$max_delta,$total_ion_intensity);
+			undef $total_ion_intensity if((length $total_ion_intensity)==0);
+			$peptideInExperimentInsert->execute($peptide_id,$experiment_id,$phosphoSite,$bestRt,$min_ppm,$max_ppm,$mean_ppm,$minRt,$maxRt,$pro_score,$max_expectancy,$mean_expectancy,$max_score,$mean_score,$num_PSMs,$max_delta,$total_ion_intensity);
 		}
 
 		$peptide_database_id{$database_id} = $peptide_id;
@@ -696,7 +756,9 @@ while(my $row = $csv->getline ($expFh)) {
 	}
 	while (my $row = $csv->getline ($fh)) {
 		my @arr = @$row;
-		my $database_id = substr($arr[0],1);
+#		my $database_id = substr($arr[0],1);#old style database id is like p2
+		my $database_id = $arr[0];
+		$database_id=~s/\D//;
 		next unless (exists $peptide_database_id{$database_id});#if not exists, peptide id < 1 see 20 lines above
 		my $peptide_id = $peptide_database_id{$database_id};
 		for (my $i = 1;$i<$num_columns-1;$i++){
@@ -715,7 +777,9 @@ while(my $row = $csv->getline ($expFh)) {
 	}
 	while (my $row = $csv->getline ($fh)) {
 		my @arr = @$row;
-		my $database_id = substr($arr[0],1);
+#		my $database_id = substr($arr[0],1);
+		my $database_id = $arr[0];
+		$database_id=~s/\D//;
 		next unless (exists $peptide_database_id{$database_id});
 		my $peptide_id = $peptide_database_id{$database_id};
 		for (my $i = 1;$i<$num_columns-1;$i++){
@@ -723,6 +787,7 @@ while(my $row = $csv->getline ($expFh)) {
 		}
 	}
 
+	$experimentUpdateProcessed->execute($experiment_id);#0 when experiment created, 1 when finish importing peak area, 2 when finish statistical analysis
 	print "Finish experiment $name at ".localtime."\n";
 
 }

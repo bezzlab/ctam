@@ -9,9 +9,9 @@ insert into vendor values (null, "Unknown",null);
 insert into vendor values (null, "ATCC", "http://www.lgcstandards-atcc.org/Products/Cells_and_Microorganisms/Cell_Lines/");
 
 #cell_line_used 	id, cell_line_id, vendor_id, vendor_product_id, link
-insert into cell_line_used values (null,1,2,null,null);
-insert into cell_line_used values (null,2,2,"CRL-1973","Human/Alphanumeric/CRL-1973.aspx");
-insert into cell_line_used values (null,3,1,null,null);
+insert into cell_line_used values (null,1,2,"",null,null,null);
+insert into cell_line_used values (null,2,2,"",null,"CRL-1973","Human/Alphanumeric/CRL-1973.aspx");
+insert into cell_line_used values (null,3,1,"",null,null,null);
 
 #experiment id, submitter, affiliation, date, cell_line_used_id, description, processed
 #insert into experiment values (null, "HL-60", "Maruan", "BCI", "2016-03-06", 1, "b1790p079-HL60-batch4",false);

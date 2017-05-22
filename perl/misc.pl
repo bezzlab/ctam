@@ -29,7 +29,7 @@ sub getDBI(){
 	my $host = $setting{$type}{'host'};
 	my $user = $setting{$type}{'user'};
 	my $password = $setting{$type}{'password'};
-	my $handle = DBI->connect("dbi:mysql:ctam:$host:3306",$user,$password) or die "Can't connect to the DB\n";
+	my $handle = DBI->connect("dbi:mysql:ctam:$host:3306",$user,$password,{mysql_enable_utf8 => 1}) or die "Can't connect to the DB\n";
 #    my $handle = database({ driver => 'mysql', database => 'ctam', username => $user, password => $password, host => $host, port => '3306' });
 	$handle->{RaiseError} = 1;
 	return $handle;
